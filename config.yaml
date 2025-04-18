@@ -1,9 +1,5 @@
-baidu_translate_url: 'https://fanyi-api.baidu.com/api/trans/vip/translate'
-tencent_translate_url: "https://tmt.tencentcloudapi.com"
-tencent_secret_id: "tencent_secret_id"
-tencent_secret_key: "tencent_secret_key"
-baidu_translate_credentials:
-  - app_id: 'app_id'
-    secret_key: 'secret_key'
-  - app_id: 'app_id'
-    secret_key: 'secret_key'
+# Google翻译配置
+google_translate_settings:
+  default_source_language: 'auto'
+  default_target_language: 'zh-cn'
+  retry_count: 3

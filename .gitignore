@@ -1,1 +1,51 @@
+# Python环境和缓存文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 日志文件
+*.log
+logs/
+
+# 敏感配置信息
 config copy.yaml
+*.env
+.env.*
+
+# 数据文件
+*.db
+*.sqlite3
+translations_converted.json
+
+# IDE相关
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 测试相关
+.coverage
+htmlcov/
+.pytest_cache/

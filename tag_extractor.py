@@ -1,13 +1,8 @@
-import hashlib
-import hmac
-import json
-import random
-import time
-from datetime import datetime
 import requests
 from flask import Blueprint, request, jsonify
 from bs4 import BeautifulSoup
 import yaml
+from googletrans import Translator
 
 # 从yaml文件加载配置
 def load_config(yaml_file):
@@ -16,170 +11,95 @@ def load_config(yaml_file):
 
 config = load_config('config.yaml')
 
-# 百度翻译API信息
-BAIDU_TRANSLATE_URL = config['baidu_translate_url']
-BAIDU_TRANSLATE_CREDENTIALS = config['baidu_translate_credentials']
-
-# 腾讯翻译API信息
-TENCENT_SECRET_ID = config['tencent_secret_id']
-TENCENT_SECRET_KEY = config['tencent_secret_key']
-TENCENT_TRANSLATE_URL = config['tencent_translate_url']
-
-# 用于轮询的索引
-current_index = 0
-
-def get_next_credentials():
+def translate_with_google(texts, from_lang='auto', to_lang='zh-cn'):
     """
-    获取下一个 APP_ID 和 SECRET_KEY 的组合，自动轮询。
+    使用Google翻译API翻译文本列表。
+    
+    Args:
+        texts: 要翻译的文本或文本列表
+        from_lang: 源语言代码，默认为'auto'（自动检测）
+        to_lang: 目标语言代码，默认为'zh-cn'（简体中文）
+        
+    Returns:
+        翻译后的文本列表，如果翻译失败则返回None
     """
-    global current_index
-    credentials = BAIDU_TRANSLATE_CREDENTIALS[current_index]
-    current_index = (current_index + 1) % len(BAIDU_TRANSLATE_CREDENTIALS)
-    return credentials
-
-def sign(key, msg):
-    """
-    使用HMAC-SHA256算法生成签名。
-    """
-    return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
-
-def generate_tc3_signature(secret_key, date, service, string_to_sign):
-    """
-    生成腾讯云TC3-HMAC-SHA256签名。
-    """
-    secret_date = sign(("TC3" + secret_key).encode("utf-8"), date)
-    secret_service = sign(secret_date, service)
-    secret_signing = sign(secret_service, "tc3_request")
-    return hmac.new(secret_signing, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
-
-def translate_with_tencent(texts, from_lang='auto', to_lang='zh'):
-    """
-    使用腾讯翻译API翻译文本列表。
-    """
-    service = "tmt"
-    host = "tmt.tencentcloudapi.com"
-    action = "TextTranslate"
-    version = "2018-03-21"
-    region = "ap-beijing"
-    timestamp = int(time.time())
-    date = datetime.utcfromtimestamp(timestamp).strftime("%Y-%m-%d")
-    algorithm = "TC3-HMAC-SHA256"  # 在这里定义 algorithm
-
-    # 构造请求参数
-    payload = {
-        "SourceText": "\n".join(texts),
-        "Source": from_lang,
-        "Target": to_lang,
-        "ProjectId": 0
-    }
-    payload_str = json.dumps(payload)
-
-    # ************* 步骤 1：拼接规范请求串 *************
-    http_request_method = "POST"
-    canonical_uri = "/"
-    canonical_querystring = ""
-    ct = "application/json; charset=utf-8"
-    canonical_headers = f"content-type:{ct}\nhost:{host}\nx-tc-action:{action.lower()}\n"
-    signed_headers = "content-type;host;x-tc-action"
-    hashed_request_payload = hashlib.sha256(payload_str.encode("utf-8")).hexdigest()
-    canonical_request = (http_request_method + "\n" +
-                         canonical_uri + "\n" +
-                         canonical_querystring + "\n" +
-                         canonical_headers + "\n" +
-                         signed_headers + "\n" +
-                         hashed_request_payload)
-
-    # ************* 步骤 2：拼接待签名字符串 *************
-    credential_scope = date + "/" + service + "/" + "tc3_request"
-    hashed_canonical_request = hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
-    string_to_sign = (algorithm + "\n" +
-                      str(timestamp) + "\n" +
-                      credential_scope + "\n" +
-                      hashed_canonical_request)
-
-    # ************* 步骤 3：计算签名 *************
-    signature = generate_tc3_signature(TENCENT_SECRET_KEY, date, service, string_to_sign)
-
-    # ************* 步骤 4：拼接 Authorization *************
-    authorization = (algorithm + " " +
-                     "Credential=" + TENCENT_SECRET_ID + "/" + credential_scope + ", " +
-                     "SignedHeaders=" + signed_headers + ", " +
-                     "Signature=" + signature)
-
-    # ************* 步骤 5：构造并发起请求 *************
-    headers = {
-        "Authorization": authorization,
-        "Content-Type": ct,
-        "Host": host,
-        "X-TC-Action": action,
-        "X-TC-Timestamp": str(timestamp),
-        "X-TC-Version": version,
-        "X-TC-Region": region
-    }
-
+    # 确保translator实例是本地创建的而不是全局的
+    translator = Translator()
+    
     try:
-        response = requests.post(TENCENT_TRANSLATE_URL, headers=headers, data=payload_str)
-        response.raise_for_status()
-        result = response.json()
-        if "Response" in result and "TargetText" in result["Response"]:
-            return result["Response"]["TargetText"].split("\n")
+        if not texts:  # 处理空输入
+            return []
+            
+        if isinstance(texts, list):
+            # 批量翻译，逐个处理以避免JSON解析错误
+            results = []
+            for text in texts:
+                if not text:  # 处理列表中的空元素
+                    results.append("")
+                    continue
+                    
+                try:
+                    translation = translator.translate(text, src=from_lang, dest=to_lang)
+                    results.append(translation.text if translation and hasattr(translation, 'text') else text)
+                except Exception as e:
+                    print(f"单个文本翻译出错: {e}")
+                    results.append(text)  # 出错则保留原始文本
+            return results
         else:
-            return None
+            # 单个文本翻译
+            if not texts:  # 处理空字符串
+                return [""]
+                
+            translation = translator.translate(texts, src=from_lang, dest=to_lang)
+            if translation and hasattr(translation, 'text'):
+                return [translation.text]
+            return [texts]  # 如果翻译结果不符合预期，返回原文本
+            
+    except ValueError as e:
+        # 处理无效目标语言错误
+        print(f"Google翻译API参数错误: {e}")
+        # 尝试其他语言代码格式
+        if 'zh' in to_lang and 'invalid destination language' in str(e):
+            try:
+                # 尝试使用其他可能的中文代码
+                for zh_code in ['zh-cn', 'zh-CN', 'zh-TW', 'zh-tw', 'zh']:
+                    try:
+                        return translate_with_google(texts, from_lang, zh_code)
+                    except:
+                        continue
+            except Exception as e2:
+                print(f"尝试其他中文代码也失败: {e2}")
+        return None
     except Exception as e:
-        print(f"腾讯翻译API请求失败: {e}")
+        print(f"Google翻译API请求失败: {e}")
         return None
 
-def translate_with_baidu(texts, from_lang='auto', to_lang='zh'):
+def translate_texts(texts, from_lang='auto', to_lang='zh-cn'):
     """
-    使用百度翻译API翻译文本列表。
+    使用Google翻译API翻译文本列表。
+    如果失败，则返回未翻译的原始文本。
+    
+    Args:
+        texts: 要翻译的文本或文本列表
+        from_lang: 源语言代码，默认为'auto'（自动检测）
+        to_lang: 目标语言代码，默认为'zh-cn'（简体中文）
+        
+    Returns:
+        翻译后的文本列表
     """
-    credentials = get_next_credentials()
-    app_id = credentials['app_id']
-    secret_key = credentials['secret_key']
-
-    salt = random.randint(32768, 65536)
-    query = '\n'.join(texts)
-    sign_str = app_id + query + str(salt) + secret_key
-    sign = hashlib.md5(sign_str.encode('utf-8')).hexdigest()
-
-    params = {
-        'q': query,
-        'from': from_lang,
-        'to': to_lang,
-        'appid': app_id,
-        'salt': salt,
-        'sign': sign
-    }
-
-    try:
-        response = requests.get(BAIDU_TRANSLATE_URL, params=params)
-        response.raise_for_status()
-        result = response.json()
-        if 'trans_result' in result:
-            return [item['dst'] for item in result['trans_result']]
-        else:
-            return None
-    except Exception as e:
-        print(f"百度翻译API请求失败: {e}")
-        return None
-
-def translate_texts(texts, from_lang='auto', to_lang='zh'):
-    """
-    优先使用腾讯翻译API翻译文本列表，失败后使用百度翻译API。
-    如果两者都失败，则返回未翻译的原始文本。
-    """
-    # 优先使用腾讯翻译API
-    translated_texts = translate_with_tencent(texts, from_lang, to_lang)
+    # 确保texts不为None
+    if texts is None:
+        return []
+        
+    # 使用Google翻译API
+    translated_texts = translate_with_google(texts, from_lang, to_lang)
     if translated_texts is not None:
         return translated_texts
 
-    # 腾讯翻译失败后使用百度翻译API
-    translated_texts = translate_with_baidu(texts, from_lang, to_lang)
-    if translated_texts is not None:
-        return translated_texts
-
-    # 两者都失败，返回原始文本
-    return texts
+    # 如果谷歌翻译失败，返回原始文本
+    if isinstance(texts, list):
+        return texts
+    return [texts] if texts else []
 
 # 创建蓝图
 tag_extractorbp = Blueprint('tag_extractor', __name__)
@@ -216,11 +136,19 @@ def extract_tags():
         }
         tags.append(tag_info)
     
-    translated_tag_names = translate_texts(tag_names)  # 翻译标签名称列表
-
-    # 将翻译后的标签名添加到标签信息中
-    for tag, translated_tag_name in zip(tags, translated_tag_names):
-        tag['translated_tag_name'] = translated_tag_name
+    # 只有当有标签名需要翻译时才执行翻译
+    if tag_names:
+        translated_tag_names = translate_texts(tag_names)
+        
+        # 将翻译后的标签名添加到标签信息中
+        for i, tag in enumerate(tags):
+            if i < len(translated_tag_names):
+                tag['translated_tag_name'] = translated_tag_names[i]
+            else:
+                tag['translated_tag_name'] = tag['tag_name']  # 如果翻译结果缺失，使用原始文本
+    else:
+        for tag in tags:
+            tag['translated_tag_name'] = tag['tag_name']
 
     # 将提取和翻译的数据组装为JSON格式返回
     return jsonify(tags)
